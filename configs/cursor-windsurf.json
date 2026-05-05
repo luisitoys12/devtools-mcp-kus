@@ -1,0 +1,9 @@
+{
+  "_instrucciones": "Guarda como .cursor/mcp.json o .windsurf/mcp.json en la raiz del proyecto",
+  "mcpServers": {
+    "kus-devtools": {
+      "url": "https://devtools-mcp-kus.fly.dev/sse?token=TU_TOKEN",
+      "transport": "sse"
+    }
+  }
+}

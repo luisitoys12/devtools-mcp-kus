@@ -1,0 +1,9 @@
+{
+  "_instrucciones": "Copia a ~/.claude/claude_desktop_config.json y reemplaza TU_TOKEN",
+  "mcpServers": {
+    "kus-devtools": {
+      "url": "https://devtools-mcp-kus.fly.dev/sse?token=TU_TOKEN",
+      "transport": "sse"
+    }
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "_instrucciones": "Guarda como .vscode/mcp.json en la raiz del proyecto",
+  "servers": {
+    "kus-devtools": {
+      "type": "sse",
+      "url": "https://devtools-mcp-kus.fly.dev/sse?token=TU_TOKEN"
+    }
+  }
+}
