@@ -4,16 +4,9 @@ WORKDIR /app
 
 RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
 
-# Solo instalar los paquetes MCP que existen en npm
-RUN npm init -y && npm install \
-    @playwright/mcp@latest \
-    @modelcontextprotocol/sdk@latest \
-    @modelcontextprotocol/server-fetch@latest \
-    @modelcontextprotocol/server-memory@latest \
-    @upstash/context7-mcp@latest \
-    firecrawl-mcp@latest \
-    express \
-    eventsource
+# Paquetes verificados en npmjs.com
+COPY package.json .
+RUN npm install
 
 RUN npx playwright install chromium
 RUN npx playwright install-deps chromium

@@ -1,0 +1,14 @@
+{
+  "name": "kus-mcp-gateway",
+  "version": "1.0.0",
+  "description": "KUS DevTools MCP Gateway",
+  "main": "server.js",
+  "dependencies": {
+    "@playwright/mcp": "latest",
+    "@modelcontextprotocol/sdk": "latest",
+    "@modelcontextprotocol/server-memory": "latest",
+    "@upstash/context7-mcp": "latest",
+    "firecrawl-mcp": "latest",
+    "express": "^4.19.2"
+  }
+}
