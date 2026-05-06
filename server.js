@@ -1,28 +1,18 @@
 /**
- * KUS DevTools MCP Gateway
- * Paquetes npm verificados:
- *   - @playwright/mcp
- *   - @modelcontextprotocol/server-memory
- *   - @upstash/context7-mcp
- *   - firecrawl-mcp
- * Fetch: implementado nativo con Node.js fetch (built-in en Node 18+)
+ * KUS DevTools MCP Gateway — Endpoint UNICO
+ * UN solo SSE con TODAS las herramientas combinadas
+ * URL: https://devtools-mcp-kus.fly.dev/sse?token=TOKEN
  */
 const express = require('express');
 const { spawn } = require('child_process');
-const https   = require('https');
-const http    = require('http');
-const { URL }  = require('url');
 
 const PORT      = parseInt(process.env.PORT || '8080');
 const API_TOKEN = process.env.MCP_AUTH_TOKEN || '';
 
-if (!API_TOKEN) {
-  console.error('ERROR: MCP_AUTH_TOKEN no configurado');
-  process.exit(1);
-}
+if (!API_TOKEN) { console.error('MCP_AUTH_TOKEN requerido'); process.exit(1); }
 
-// ─── Definicion de herramientas ────────────────────────────────────────────
-const MCP_TOOLS = [
+// ─── Definicion de MCPs stdio ─────────────────────────────────────────────────
+const MCP_DEFS = [
   {
     name: 'playwright',
     cmd: 'node',
@@ -53,26 +43,23 @@ const MCP_TOOLS = [
   },
 ];
 
-// ─── MCP Stdio Bridge ──────────────────────────────────────────────────────
+// ─── Bridge stdio→JSON-RPC ────────────────────────────────────────────────────
 class McpBridge {
-  constructor(tool) {
-    this.tool     = tool;
-    this.proc     = null;
-    this.pending  = new Map();
-    this.msgId    = 1;
-    this.buffer   = '';
-    this.ready    = false;
-    this.sessions = new Map();
+  constructor(def) {
+    this.def     = def;
+    this.proc    = null;
+    this.pending = new Map();
+    this.msgId   = 1;
+    this.buffer  = '';
+    this.ready   = false;
   }
 
   start() {
-    const env = { ...process.env, ...this.tool.env };
-    this.proc = spawn(this.tool.cmd, this.tool.args, {
-      stdio: ['pipe', 'pipe', 'inherit'],
-      env,
+    const env = { ...process.env, ...this.def.env };
+    this.proc = spawn(this.def.cmd, this.def.args, {
+      stdio: ['pipe', 'pipe', 'inherit'], env,
     });
-
-    this.proc.stdout.on('data', (chunk) => {
+    this.proc.stdout.on('data', chunk => {
       this.buffer += chunk.toString();
       let nl;
       while ((nl = this.buffer.indexOf('\n')) !== -1) {
@@ -85,133 +72,126 @@ class McpBridge {
             const { resolve } = this.pending.get(msg.id);
             this.pending.delete(msg.id);
             resolve(msg);
-          } else {
-            this._broadcast(msg);
           }
         } catch (_) {}
       }
     });
-
-    this.proc.on('exit', (code) => {
-      console.warn(`[${this.tool.name}] exited (${code}), restart in 3s`);
+    this.proc.on('exit', code => {
+      console.warn(`[${this.def.name}] exit(${code}), restart in 3s`);
       this.ready = false;
       setTimeout(() => this.start(), 3000);
     });
-
     this._init();
   }
 
   async _init() {
     try {
-      await this._send({
-        jsonrpc: '2.0', id: this.msgId++,
-        method: 'initialize',
-        params: {
-          protocolVersion: '2024-11-05',
-          clientInfo: { name: 'kus-gateway', version: '1.0.0' },
-          capabilities: {},
-        },
+      await this._rpc('initialize', {
+        protocolVersion: '2024-11-05',
+        clientInfo: { name: 'kus-gateway', version: '1.0.0' },
+        capabilities: {},
       });
       this._write({ jsonrpc: '2.0', method: 'notifications/initialized' });
       this.ready = true;
-      console.log(`[${this.tool.name}] ready`);
+      console.log(`[${this.def.name}] ready`);
     } catch (e) {
-      console.error(`[${this.tool.name}] init error:`, e.message);
+      console.error(`[${this.def.name}] init error:`, e.message);
       setTimeout(() => this._init(), 5000);
     }
   }
 
   _write(obj) { this.proc.stdin.write(JSON.stringify(obj) + '\n'); }
 
-  _send(obj) {
+  _rpc(method, params) {
     return new Promise((resolve, reject) => {
-      const t = setTimeout(() => {
-        this.pending.delete(obj.id);
-        reject(new Error(`Timeout: ${this.tool.name}`));
-      }, 60000);
-      this.pending.set(obj.id, {
+      const id = this.msgId++;
+      const t  = setTimeout(() => { this.pending.delete(id); reject(new Error(`Timeout: ${this.def.name}.${method}`)); }, 60000);
+      this.pending.set(id, {
         resolve: v => { clearTimeout(t); resolve(v); },
         reject:  v => { clearTimeout(t); reject(v); },
       });
-      this._write(obj);
+      this._write({ jsonrpc: '2.0', id, method, params: params || {} });
     });
   }
 
   async listTools() {
-    const r = await this._send({ jsonrpc: '2.0', id: this.msgId++, method: 'tools/list', params: {} });
-    return r.result?.tools || [];
+    const r = await this._rpc('tools/list');
+    return (r.result?.tools || []).map(t => ({ ...t, _bridge: this.def.name }));
   }
 
   async callTool(name, args) {
-    const r = await this._send({
-      jsonrpc: '2.0', id: this.msgId++,
-      method: 'tools/call',
-      params: { name, arguments: args },
-    });
+    const r = await this._rpc('tools/call', { name, arguments: args });
     if (r.error) throw new Error(r.error.message);
     return r.result;
   }
-
-  _broadcast(msg) {
-    const data = JSON.stringify(msg);
-    for (const [, res] of this.sessions)
-      res.write(`event: message\ndata: ${data}\n\n`);
-  }
-
-  addSession(id, res)  { this.sessions.set(id, res); }
-  removeSession(id)    { this.sessions.delete(id); }
 }
 
-// ─── Fetch nativo (Node 18+) como herramienta MCP virtual ─────────────────
-class FetchBridge {
-  constructor() { this.ready = true; this.sessions = new Map(); }
-  start() { console.log('[fetch] ready (native Node fetch)'); }
-  addSession(id, res)  { this.sessions.set(id, res); }
-  removeSession(id)    { this.sessions.delete(id); }
+// ─── Fetch nativo (sin paquete externo) ──────────────────────────────────────
+const FETCH_TOOLS = [{
+  name: 'fetch',
+  _bridge: 'fetch',
+  description: 'Fetch a URL and return its text content',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      url:     { type: 'string', description: 'URL a obtener' },
+      method:  { type: 'string', default: 'GET' },
+      headers: { type: 'object' },
+      body:    { type: 'string' },
+    },
+    required: ['url'],
+  },
+}];
 
-  async listTools() {
-    return [{
-      name: 'fetch',
-      description: 'Fetch a URL and return its content',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          url:     { type: 'string', description: 'URL to fetch' },
-          method:  { type: 'string', default: 'GET' },
-          headers: { type: 'object' },
-          body:    { type: 'string' },
-        },
-        required: ['url'],
-      },
-    }];
-  }
-
-  async callTool(name, args) {
-    if (name !== 'fetch') throw new Error('Unknown tool: ' + name);
-    const { url, method = 'GET', headers = {}, body } = args;
-    const res = await fetch(url, {
-      method,
-      headers: { 'User-Agent': 'KUS-MCP-Gateway/1.0', ...headers },
-      body: body || undefined,
-    });
-    const text = await res.text();
-    return { content: [{ type: 'text', text: `Status: ${res.status}\n\n${text.slice(0, 50000)}` }] };
-  }
+async function callFetch(args) {
+  const { url, method = 'GET', headers = {}, body } = args;
+  const res = await fetch(url, {
+    method,
+    headers: { 'User-Agent': 'KUS-MCP-Gateway/1.0', ...headers },
+    body: body || undefined,
+  });
+  const text = await res.text();
+  return { content: [{ type: 'text', text: `HTTP ${res.status}\n\n${text.slice(0, 50000)}` }] };
 }
 
-// Iniciar bridges
+// ─── Iniciar bridges ─────────────────────────────────────────────────────────
 const bridges = {};
-bridges['fetch'] = new FetchBridge();
-bridges['fetch'].start();
-
-for (const tool of MCP_TOOLS) {
-  if (tool.enabled()) {
-    bridges[tool.name] = new McpBridge(tool);
-    bridges[tool.name].start();
+for (const def of MCP_DEFS) {
+  if (def.enabled()) {
+    bridges[def.name] = new McpBridge(def);
+    bridges[def.name].start();
   }
 }
 
-// ─── Express ───────────────────────────────────────────────────────────────
+// Cache de tools (se refresca cada 60s)
+let toolsCache = null;
+let toolsMap   = {};  // tool.name -> bridge name
+async function getTools() {
+  if (toolsCache) return toolsCache;
+  const all = [...FETCH_TOOLS];
+  for (const [, b] of Object.entries(bridges)) {
+    if (!b.ready) continue;
+    try { all.push(...(await b.listTools())); } catch (_) {}
+  }
+  toolsMap = {};
+  for (const t of all) { toolsMap[t.name] = t._bridge || null; delete t._bridge; }
+  toolsCache = all;
+  setTimeout(() => { toolsCache = null; }, 60000);
+  return all;
+}
+
+async function callAnyTool(name, args) {
+  const bridge = toolsMap[name];
+  if (bridge === 'fetch') return callFetch(args);
+  if (bridges[bridge])   return bridges[bridge].callTool(name, args);
+  // Si no esta en cache, buscar en todos los bridges
+  for (const [, b] of Object.entries(bridges)) {
+    try { return await b.callTool(name, args); } catch (_) {}
+  }
+  throw new Error(`Tool not found: ${name}`);
+}
+
+// ─── Express ─────────────────────────────────────────────────────────────────
 const app = express();
 app.use(express.json());
 
@@ -225,80 +205,94 @@ function auth(req, res, next) {
   res.status(401).json({ error: 'Unauthorized' });
 }
 
-app.get('/:tool/sse', auth, (req, res) => {
-  const bridge = bridges[req.params.tool];
-  if (!bridge) return res.status(404).json({ error: 'Tool not found' });
+// ─── SSE UNICO ───────────────────────────────────────────────────────────────
+const sessions = new Map();
 
-  const sid = `${req.params.tool}_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+app.get('/sse', auth, (req, res) => {
+  const sid = `kus_${Date.now()}_${Math.random().toString(36).slice(2)}`;
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
   res.setHeader('X-Accel-Buffering', 'no');
   res.flushHeaders();
 
-  bridge.addSession(sid, res);
-  res.write(`event: endpoint\ndata: /${req.params.tool}/message?sessionId=${sid}\n\n`);
+  sessions.set(sid, res);
+  // MCP spec: primer evento es la URL del endpoint
+  res.write(`event: endpoint\ndata: /message?sessionId=${sid}\n\n`);
 
   const ping = setInterval(() => res.write(': ping\n\n'), 15000);
-  req.on('close', () => { clearInterval(ping); bridge.removeSession(sid); });
+  req.on('close', () => { clearInterval(ping); sessions.delete(sid); });
 });
 
-app.post('/:tool/message', auth, async (req, res) => {
-  const bridge = bridges[req.params.tool];
-  if (!bridge) return res.status(404).json({ error: 'Tool not found' });
-  if (!bridge.ready) return res.status(503).json({ error: 'Starting...' });
-
+// ─── MESSAGE UNICO ───────────────────────────────────────────────────────────
+app.post('/message', auth, async (req, res) => {
   const { sessionId } = req.query;
   const msg = req.body;
+  const session = sessions.get(sessionId);
 
-  const emit = (payload) => {
-    const session = bridge.sessions?.get(sessionId);
-    if (session) session.write(`event: message\ndata: ${JSON.stringify(payload)}\n\n`);
+  const emit = (result) => {
+    const payload = JSON.stringify({ jsonrpc: '2.0', id: msg.id, result });
+    if (session) session.write(`event: message\ndata: ${payload}\n\n`);
+    res.json({ ok: true });
+  };
+  const emitErr = (code, message) => {
+    const payload = JSON.stringify({ jsonrpc: '2.0', id: msg.id, error: { code, message } });
+    if (session) session.write(`event: message\ndata: ${payload}\n\n`);
     res.json({ ok: true });
   };
 
-  const emitErr = (code, message) => emit({ jsonrpc: '2.0', id: msg.id, error: { code, message } });
-
   try {
-    if (msg.method === 'initialize')
-      return emit({ jsonrpc: '2.0', id: msg.id, result: {
+    if (msg.method === 'initialize') {
+      return emit({
         protocolVersion: '2024-11-05',
-        serverInfo: { name: `kus-${req.params.tool}`, version: '1.0.0' },
+        serverInfo: { name: 'kus-devtools', version: '1.0.0' },
         capabilities: { tools: {} },
-      }});
+      });
+    }
     if (msg.method === 'notifications/initialized') return res.json({ ok: true });
     if (msg.method === 'tools/list') {
-      const tools = await bridge.listTools();
-      return emit({ jsonrpc: '2.0', id: msg.id, result: { tools } });
+      const tools = await getTools();
+      return emit({ tools });
     }
     if (msg.method === 'tools/call') {
-      const result = await bridge.callTool(msg.params.name, msg.params.arguments || {});
-      return emit({ jsonrpc: '2.0', id: msg.id, result });
+      const result = await callAnyTool(msg.params.name, msg.params.arguments || {});
+      return emit(result);
     }
     return emitErr(-32601, 'Method not found: ' + msg.method);
   } catch (e) {
-    console.error(`[${req.params.tool}]`, e.message);
+    console.error('[message]', e.message);
     return emitErr(-32603, e.message);
   }
 });
 
+// ─── Rutas individuales (compatibilidad hacia atras) ──────────────────────────
+app.get('/:tool/sse', auth, (req, res) => {
+  // Redirige al SSE unico
+  res.redirect(`/sse?token=${getToken(req)}`);
+});
+
+// ─── Info y health ────────────────────────────────────────────────────────────
 app.get('/', (_req, res) => {
-  const active = Object.keys(bridges);
+  const active = ['fetch', ...Object.keys(bridges)];
   res.type('text').send(
-    'KUS DevTools MCP Gateway\n' +
-    '========================\n\n' +
-    active.map(t => `  ${t.padEnd(12)}: /${t}/sse?token=TOKEN`).join('\n') + '\n'
+    'KUS DevTools MCP Gateway — Endpoint Unico\n' +
+    '==========================================\n\n' +
+    'UN SOLO LINK para todas las herramientas:\n' +
+    '  SSE:  /sse?token=TOKEN\n' +
+    '  POST: /message?sessionId=ID\n\n' +
+    'Herramientas activas: ' + active.join(', ') + '\n'
   );
 });
 
-app.get('/health', (_req, res) => {
+app.get('/health', async (_req, res) => {
   const tools = {};
   for (const [k, b] of Object.entries(bridges))
     tools[k] = b.ready ? 'ready' : 'starting';
+  tools['fetch'] = 'ready';
   res.json({ status: 'ok', tools });
 });
 
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`KUS MCP Gateway on port ${PORT}`);
-  console.log('Tools:', Object.keys(bridges).join(', '));
+  console.log(`KUS MCP Gateway (endpoint unico) en puerto ${PORT}`);
+  console.log('Tools:', ['fetch', ...Object.keys(bridges)].join(', '));
 });
