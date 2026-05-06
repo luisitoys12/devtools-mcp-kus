@@ -1,8 +1,28 @@
 {
   "_instrucciones": "Copia a ~/.claude/claude_desktop_config.json y reemplaza TU_TOKEN",
   "mcpServers": {
-    "kus-devtools": {
-      "url": "https://devtools-mcp-kus.fly.dev/sse?token=TU_TOKEN",
+    "kus-playwright": {
+      "url": "https://devtools-mcp-kus.fly.dev/playwright/sse?token=TU_TOKEN",
+      "transport": "sse"
+    },
+    "kus-fetch": {
+      "url": "https://devtools-mcp-kus.fly.dev/fetch/sse?token=TU_TOKEN",
+      "transport": "sse"
+    },
+    "kus-memory": {
+      "url": "https://devtools-mcp-kus.fly.dev/memory/sse?token=TU_TOKEN",
+      "transport": "sse"
+    },
+    "kus-context7": {
+      "url": "https://devtools-mcp-kus.fly.dev/context7/sse?token=TU_TOKEN",
+      "transport": "sse"
+    },
+    "kus-firecrawl": {
+      "url": "https://devtools-mcp-kus.fly.dev/firecrawl/sse?token=TU_TOKEN",
+      "transport": "sse"
+    },
+    "kus-npmdocs": {
+      "url": "https://devtools-mcp-kus.fly.dev/npmdocs/sse?token=TU_TOKEN",
       "transport": "sse"
     }
   }

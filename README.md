@@ -1,64 +1,64 @@
-# 🚀 KUS DevTools MCP Server
+# 🚀 KUS DevTools MCP Gateway
 
-> Servidor MCP remoto 100% en la nube para los desarrolladores de **Cush Media**.
+> Gateway MCP multi-herramienta 100% en la nube para los desarrolladores de **Cush Media**.
 > Compatible con Claude Code, Cursor, Windsurf, n8n, VS Code.
 
 ## Herramientas disponibles
 
-| Tool | Descripcion |
-|---|---|
-| 🎭 Playwright | Browser automation, scraping, capturas, PDFs, tests E2E |
-| 📸 Screenshots | Capturas de paginas completas |
-| 🔍 Network | Inspeccionar peticiones de red |
-| ⚡ JavaScript | Ejecutar JS en el navegador |
+| Tool | Ruta SSE | Descripcion |
+|---|---|---|
+| 🎭 Playwright | `/playwright/sse` | Browser automation, scraping, capturas, PDFs, tests E2E |
+| 🌐 Fetch | `/fetch/sse` | HTTP requests, leer APIs, descargar paginas |
+| 🧠 Memory | `/memory/sse` | Memoria persistente en sesion para el agente |
+| 📚 Context7 | `/context7/sse` | Docs actualizadas de cualquier libreria (React, Next.js, Fly.io...) |
+| 🔥 Firecrawl | `/firecrawl/sse` | Web scraping avanzado con Markdown limpio (requiere API key) |
+| 📦 NPM Docs | `/npmdocs/sse` | Documentacion de paquetes npm en tiempo real |
 
-## Setup para devs (2 minutos)
+## Config para devs (2 minutos)
 
-### 1. Claude Code
-```bash
-cp configs/claude-code.json ~/.claude/claude_desktop_config.json
-# Editar y poner token real
+### Claude Code / Desktop
+```json
+{
+  "mcpServers": {
+    "kus-playwright": { "url": "https://devtools-mcp-kus.fly.dev/playwright/sse?token=TU_TOKEN", "transport": "sse" },
+    "kus-fetch":      { "url": "https://devtools-mcp-kus.fly.dev/fetch/sse?token=TU_TOKEN",      "transport": "sse" },
+    "kus-memory":     { "url": "https://devtools-mcp-kus.fly.dev/memory/sse?token=TU_TOKEN",     "transport": "sse" },
+    "kus-context7":   { "url": "https://devtools-mcp-kus.fly.dev/context7/sse?token=TU_TOKEN",   "transport": "sse" },
+    "kus-firecrawl":  { "url": "https://devtools-mcp-kus.fly.dev/firecrawl/sse?token=TU_TOKEN",  "transport": "sse" },
+    "kus-npmdocs":    { "url": "https://devtools-mcp-kus.fly.dev/npmdocs/sse?token=TU_TOKEN",    "transport": "sse" }
+  }
+}
 ```
 
-### 2. Cursor / Windsurf
-```bash
-cp configs/cursor-windsurf.json .cursor/mcp.json
-```
+### Cursor / Windsurf / VS Code
+Mismo JSON, guardar en `.cursor/mcp.json` o `.windsurf/mcp.json`
 
-### 3. VS Code + Copilot
-```bash
-cp configs/vscode.json .vscode/mcp.json
-```
-
-### 4. n8n
+### n8n
 - Nodo MCP Client → Transport: SSE
-- URL: `https://devtools-mcp-kus.fly.dev/sse?token=TU_TOKEN`
+- URL: `https://devtools-mcp-kus.fly.dev/playwright/sse?token=TU_TOKEN`
 
-## Deploy propio
-
+## Activar Firecrawl
 ```bash
-git clone https://github.com/luisitoys12/devtools-mcp-kus.git
-cd devtools-mcp-kus
-fly launch --name mi-devtools-mcp
-fly secrets set MCP_AUTH_TOKEN=mi_token_secreto
-fly deploy
+fly secrets set FIRECRAWL_API_KEY=tu_api_key --app devtools-mcp-kus
+fly deploy --app devtools-mcp-kus
 ```
+API key gratis en: https://firecrawl.dev
 
 ## Arquitectura
 
 ```
-Cliente MCP
+Cliente MCP (Claude/Cursor/n8n)
     |
     | HTTPS + Bearer Token
     v
-Express Auth Layer (:8080)
+Express Gateway (:8080)
     |
-    | HTTP interno sin Origin header
-    v
-@playwright/mcp (localhost:8931)
-    |
-    v
-Chromium headless en Fly.io
+    |-- /playwright/* --> @playwright/mcp    (:8931)
+    |-- /fetch/*      --> server-fetch       (:8932)
+    |-- /memory/*     --> server-memory      (:8933)
+    |-- /context7/*   --> context7-mcp       (:8934)
+    |-- /firecrawl/*  --> firecrawl-mcp      (:8935)
+    |-- /npmdocs/*    --> npm-package-docs   (:8936)
 ```
 
 ---
