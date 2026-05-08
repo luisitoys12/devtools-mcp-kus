@@ -41,6 +41,23 @@ const MCP_DEFS = [
     env: { FIRECRAWL_API_KEY: process.env.FIRECRAWL_API_KEY || '' },
     enabled: () => !!process.env.FIRECRAWL_API_KEY,
   },
+  // ─── Spotify MCP ──────────────────────────────────────────────────────────
+  // Requiere variables de entorno en Fly.io:
+  //   SPOTIFY_CLIENT_ID     → App ID de Spotify Developer Dashboard
+  //   SPOTIFY_CLIENT_SECRET → App Secret de Spotify Developer Dashboard
+  //   SPOTIFY_REDIRECT_URI  → https://devtools-mcp-kus.fly.dev/spotify/callback
+  // Docs: https://github.com/imprvhub/mcp-claude-spotify
+  {
+    name: 'spotify',
+    cmd: 'node',
+    args: ['./node_modules/mcp-claude-spotify/build/index.js'],
+    env: {
+      SPOTIFY_CLIENT_ID:     process.env.SPOTIFY_CLIENT_ID     || '',
+      SPOTIFY_CLIENT_SECRET: process.env.SPOTIFY_CLIENT_SECRET || '',
+      SPOTIFY_REDIRECT_URI:  process.env.SPOTIFY_REDIRECT_URI  || 'http://127.0.0.1:8888/callback',
+    },
+    enabled: () => !!(process.env.SPOTIFY_CLIENT_ID && process.env.SPOTIFY_CLIENT_SECRET),
+  },
 ];
 
 // ─── Bridge stdio→JSON-RPC ────────────────────────────────────────────────────
@@ -245,7 +262,7 @@ app.post('/message', auth, async (req, res) => {
     if (msg.method === 'initialize') {
       return emit({
         protocolVersion: '2024-11-05',
-        serverInfo: { name: 'kus-devtools', version: '1.0.0' },
+        serverInfo: { name: 'kus-devtools', version: '2.1.0' },
         capabilities: { tools: {} },
       });
     }
@@ -275,8 +292,8 @@ app.get('/:tool/sse', auth, (req, res) => {
 app.get('/', (_req, res) => {
   const active = ['fetch', ...Object.keys(bridges)];
   res.type('text').send(
-    'KUS DevTools MCP Gateway — Endpoint Unico\n' +
-    '==========================================\n\n' +
+    'KUS DevTools MCP Gateway v2.1.0 — Endpoint Unico\n' +
+    '=================================================\n\n' +
     'UN SOLO LINK para todas las herramientas:\n' +
     '  SSE:  /sse?token=TOKEN\n' +
     '  POST: /message?sessionId=ID\n\n' +
@@ -293,6 +310,6 @@ app.get('/health', async (_req, res) => {
 });
 
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`KUS MCP Gateway (endpoint unico) en puerto ${PORT}`);
+  console.log(`KUS MCP Gateway v2.1.0 (endpoint unico) en puerto ${PORT}`);
   console.log('Tools:', ['fetch', ...Object.keys(bridges)].join(', '));
 });
