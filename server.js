@@ -41,16 +41,15 @@ const MCP_DEFS = [
     env: { FIRECRAWL_API_KEY: process.env.FIRECRAWL_API_KEY || '' },
     enabled: () => !!process.env.FIRECRAWL_API_KEY,
   },
-  // ─── Spotify MCP ──────────────────────────────────────────────────────────
-  // Requiere variables de entorno en Fly.io:
+  // ─── Spotify MCP ──────────────────────────────────────────────────────────────
+  // Clonado via Dockerfile desde: https://github.com/imprvhub/mcp-claude-spotify
+  // Requiere secrets en Fly.io:
   //   SPOTIFY_CLIENT_ID     → App ID de Spotify Developer Dashboard
   //   SPOTIFY_CLIENT_SECRET → App Secret de Spotify Developer Dashboard
-  //   SPOTIFY_REDIRECT_URI  → https://devtools-mcp-kus.fly.dev/spotify/callback
-  // Docs: https://github.com/imprvhub/mcp-claude-spotify
   {
     name: 'spotify',
     cmd: 'node',
-    args: ['./node_modules/mcp-claude-spotify/build/index.js'],
+    args: ['/app/spotify-mcp/build/index.js'],
     env: {
       SPOTIFY_CLIENT_ID:     process.env.SPOTIFY_CLIENT_ID     || '',
       SPOTIFY_CLIENT_SECRET: process.env.SPOTIFY_CLIENT_SECRET || '',
@@ -201,7 +200,6 @@ async function callAnyTool(name, args) {
   const bridge = toolsMap[name];
   if (bridge === 'fetch') return callFetch(args);
   if (bridges[bridge])   return bridges[bridge].callTool(name, args);
-  // Si no esta en cache, buscar en todos los bridges
   for (const [, b] of Object.entries(bridges)) {
     try { return await b.callTool(name, args); } catch (_) {}
   }
@@ -234,7 +232,6 @@ app.get('/sse', auth, (req, res) => {
   res.flushHeaders();
 
   sessions.set(sid, res);
-  // MCP spec: primer evento es la URL del endpoint
   res.write(`event: endpoint\ndata: /message?sessionId=${sid}\n\n`);
 
   const ping = setInterval(() => res.write(': ping\n\n'), 15000);
@@ -284,7 +281,6 @@ app.post('/message', auth, async (req, res) => {
 
 // ─── Rutas individuales (compatibilidad hacia atras) ──────────────────────────
 app.get('/:tool/sse', auth, (req, res) => {
-  // Redirige al SSE unico
   res.redirect(`/sse?token=${getToken(req)}`);
 });
 

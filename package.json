@@ -19,7 +19,6 @@
     "mcp-server-chart": "latest",
     "@notionhq/notion-mcp-server": "latest",
     "mcp-obsidian": "latest",
-    "mcp-server-axios": "latest",
-    "mcp-claude-spotify": "latest"
+    "mcp-server-axios": "latest"
   }
 }
