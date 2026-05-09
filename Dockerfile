@@ -7,6 +7,7 @@ RUN apt-get update && apt-get install -y \
     git \
     python3 \
     python3-pip \
+    python3-venv \
     wget \
     ca-certificates \
     --no-install-recommends \
@@ -14,6 +15,15 @@ RUN apt-get update && apt-get install -y \
 
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
     PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
+
+# Instalar spotdl en venv aislado para evitar conflictos con pip del sistema
+RUN python3 -m venv /opt/spotdl-env \
+  && /opt/spotdl-env/bin/pip install --upgrade pip \
+  && /opt/spotdl-env/bin/pip install spotdl \
+  && /opt/spotdl-env/bin/spotdl --download-ffmpeg || true
+
+# Symlink para llamarlo como "spotdl" desde cualquier path
+RUN ln -s /opt/spotdl-env/bin/spotdl /usr/local/bin/spotdl
 
 WORKDIR /app
 
