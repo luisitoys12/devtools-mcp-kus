@@ -45,11 +45,6 @@ const MCP_DEFS = [
     env: { FIRECRAWL_API_KEY: process.env.FIRECRAWL_API_KEY || '' },
     enabled: () => !!process.env.FIRECRAWL_API_KEY,
   },
-  // ─── Spotify MCP ──────────────────────────────────────────────────────────────
-  // Clonado via Dockerfile desde: https://github.com/imprvhub/mcp-claude-spotify
-  // Requiere secrets en Fly.io:
-  //   SPOTIFY_CLIENT_ID     → App ID de Spotify Developer Dashboard
-  //   SPOTIFY_CLIENT_SECRET → App Secret de Spotify Developer Dashboard
   {
     name: 'spotify',
     cmd: 'node',
@@ -146,7 +141,7 @@ class McpBridge {
   }
 }
 
-// ─── Fetch nativo (sin paquete externo) ──────────────────────────────────────
+// ─── Fetch nativo ─────────────────────────────────────────────────────────────
 const FETCH_TOOLS = [{
   name: 'fetch',
   _bridge: 'fetch',
@@ -174,9 +169,7 @@ async function callFetch(args) {
   return { content: [{ type: 'text', text: `HTTP ${res.status}\n\n${text.slice(0, 50000)}` }] };
 }
 
-// ─── Download Audio Tool (yt-dlp) ─────────────────────────────────────────────
-// Soporta: YouTube, SoundCloud, Bandcamp, Vimeo, Twitter/X, TikTok y +1000 sitios
-// Salida: URL temporal de descarga (archivo guardado en /tmp del contenedor)
+// ─── Download Audio Tool (yt-dlp) ────────────────────────────────────────────
 const DOWNLOAD_TOOLS = [{
   name: 'download_audio',
   _bridge: 'download',
@@ -208,10 +201,73 @@ const DOWNLOAD_TOOLS = [{
   },
 }];
 
-// Mapa temporal: token → { filePath, expires }
+// ─── Download Music Tool (Deezer via ARL) ────────────────────────────────────
+// Requiere secret: DEEZER_ARL
+// Cómo obtener tu ARL:
+//   1. Abre deezer.com en Chrome (cuenta Free o Premium)
+//   2. DevTools → Application → Cookies → deezer.com
+//   3. Copia el valor de la cookie "arl"
+//   4. fly secrets set DEEZER_ARL=<tu_arl>
+const DEEZER_TOOLS = [
+  {
+    name: 'download_music',
+    _bridge: 'deezer',
+    description:
+      'Descarga música directamente desde Deezer en alta calidad (FLAC lossless o MP3 320kbps). ' +
+      'Soporta canciones individuales, álbumes completos y playlists mediante URL de Deezer. ' +
+      'Requiere que DEEZER_ARL esté configurado como secret en Fly.io. ' +
+      'Devuelve una URL temporal de descarga válida por 10 minutos. ' +
+      'Ejemplos de URL válidas: https://www.deezer.com/track/123456, https://www.deezer.com/album/789, https://www.deezer.com/playlist/456',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        url: {
+          type: 'string',
+          description: 'URL de Deezer: track, album o playlist (ej: https://www.deezer.com/track/123456)',
+        },
+        quality: {
+          type: 'string',
+          enum: ['flac', 'mp3_320', 'mp3_128'],
+          default: 'mp3_320',
+          description: 'Calidad de descarga: flac=lossless (Premium), mp3_320=alta (Premium), mp3_128=estándar (Free)',
+        },
+      },
+      required: ['url'],
+    },
+  },
+  {
+    name: 'search_deezer',
+    _bridge: 'deezer',
+    description:
+      'Busca canciones, álbumes o artistas en Deezer y devuelve resultados con URLs directas para usar con download_music.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: {
+          type: 'string',
+          description: 'Texto de búsqueda (ej: "Bad Bunny Tití me preguntó", "Taylor Swift Midnights")',
+        },
+        type: {
+          type: 'string',
+          enum: ['track', 'album', 'artist', 'playlist'],
+          default: 'track',
+          description: 'Tipo de búsqueda',
+        },
+        limit: {
+          type: 'number',
+          default: 10,
+          description: 'Número máximo de resultados (1-25)',
+        },
+      },
+      required: ['query'],
+    },
+  },
+];
+
+// Mapa temporal: token → { filePath, fileName, expires }
 const tempFiles = new Map();
 
-// Limpieza automática de archivos expirados cada 5 minutos
+// Limpieza automática cada 5 minutos
 setInterval(() => {
   const now = Date.now();
   for (const [token, entry] of tempFiles.entries()) {
@@ -222,62 +278,40 @@ setInterval(() => {
   }
 }, 5 * 60 * 1000);
 
+function registerTemp(filePath, fileName) {
+  const token   = `dl_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  const expires = Date.now() + 10 * 60 * 1000;
+  tempFiles.set(token, { filePath, fileName, expires });
+  return token;
+}
+
 async function callDownloadAudio(args) {
   const { url, format = 'mp3', quality = '2' } = args;
-
-  // Primero obtener metadata sin descargar
   let meta;
   try {
     meta = await ytdlp(url, {
-      dumpSingleJson: true,
-      noWarnings: true,
-      noCheckCertificate: true,
-      preferFreeFormats: true,
-      skipDownload: true,
+      dumpSingleJson: true, noWarnings: true, noCheckCertificate: true,
+      preferFreeFormats: true, skipDownload: true,
     });
   } catch (e) {
     throw new Error(`No se pudo obtener metadata de la URL: ${e.message}`);
   }
-
   const title    = meta.title    || 'audio';
   const artist   = meta.uploader || meta.channel || meta.artist || 'Desconocido';
   const duration = meta.duration ? `${Math.floor(meta.duration / 60)}:${String(meta.duration % 60).padStart(2, '0')}` : 'N/A';
   const thumb    = meta.thumbnail || '';
   const site     = meta.extractor_key || 'Desconocido';
-
-  // Nombre de archivo seguro
   const safeName = title.replace(/[^a-zA-Z0-9\-_\s]/g, '').trim().replace(/\s+/g, '_').slice(0, 80);
   const outFile  = path.join(os.tmpdir(), `kus_audio_${Date.now()}_${safeName}.${format}`);
-
-  // Descargar y convertir
   try {
     await ytdlp(url, {
-      extractAudio: true,
-      audioFormat: format,
-      audioQuality: quality,
-      output: outFile,
-      noWarnings: true,
-      noCheckCertificate: true,
-      preferFreeFormats: true,
+      extractAudio: true, audioFormat: format, audioQuality: quality,
+      output: outFile, noWarnings: true, noCheckCertificate: true, preferFreeFormats: true,
     });
-  } catch (e) {
-    throw new Error(`Error al descargar audio: ${e.message}`);
-  }
-
-  if (!fs.existsSync(outFile)) {
-    throw new Error('El archivo de audio no fue generado. Verifica que ffmpeg esté instalado.');
-  }
-
-  const stat    = fs.statSync(outFile);
-  const sizeMB  = (stat.size / 1024 / 1024).toFixed(2);
-
-  // Generar token temporal (10 minutos)
-  const token   = `dl_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-  const expires = Date.now() + 10 * 60 * 1000;
-  tempFiles.set(token, { filePath: outFile, fileName: `${safeName}.${format}`, expires });
-
-  const downloadUrl = `/download/${token}`;
-
+  } catch (e) { throw new Error(`Error al descargar audio: ${e.message}`); }
+  if (!fs.existsSync(outFile)) throw new Error('El archivo de audio no fue generado. Verifica que ffmpeg esté instalado.');
+  const sizeMB = (fs.statSync(outFile).size / 1024 / 1024).toFixed(2);
+  const token  = registerTemp(outFile, `${safeName}.${format}`);
   const summary = [
     `✅ Audio listo para descargar`,
     ``,
@@ -289,15 +323,122 @@ async function callDownloadAudio(args) {
     `💾 Tamaño:    ${sizeMB} MB`,
     ``,
     `🔗 URL de descarga (válida 10 min):`,
-    `   https://devtools-mcp-kus.fly.dev${downloadUrl}`,
+    `   https://devtools-mcp-kus.fly.dev/download/${token}`,
     ``,
     thumb ? `🖼  Thumbnail: ${thumb}` : '',
   ].filter(l => l !== undefined).join('\n');
-
   return { content: [{ type: 'text', text: summary }] };
 }
 
-// ─── Iniciar bridges ─────────────────────────────────────────────────────────
+// ─── Deezer: search (API pública, sin ARL) ────────────────────────────────────
+async function callSearchDeezer(args) {
+  const { query, type = 'track', limit = 10 } = args;
+  const safeLimit = Math.min(Math.max(1, limit), 25);
+  const apiUrl = `https://api.deezer.com/search/${type}?q=${encodeURIComponent(query)}&limit=${safeLimit}`;
+  const res  = await fetch(apiUrl, { headers: { 'User-Agent': 'KUS-MCP-Gateway/2.3' } });
+  const data = await res.json();
+  if (!data.data || data.data.length === 0) {
+    return { content: [{ type: 'text', text: `No se encontraron resultados para "${query}" en Deezer.` }] };
+  }
+  const lines = [`🔍 Resultados de Deezer para "${query}" (${type}):`, ''];
+  for (const item of data.data) {
+    if (type === 'track') {
+      const dur = item.duration ? `${Math.floor(item.duration/60)}:${String(item.duration%60).padStart(2,'0')}` : '';
+      lines.push(`🎵 ${item.title}`);
+      lines.push(`   👤 ${item.artist?.name || ''} — 💿 ${item.album?.title || ''}`);
+      lines.push(`   ⏱ ${dur}  🔗 ${item.link}`);
+    } else if (type === 'album') {
+      lines.push(`💿 ${item.title}`);
+      lines.push(`   👤 ${item.artist?.name || ''}  🔗 ${item.link}`);
+    } else if (type === 'artist') {
+      lines.push(`🎤 ${item.name}`);
+      lines.push(`   🔗 ${item.link}`);
+    } else if (type === 'playlist') {
+      lines.push(`📋 ${item.title}`);
+      lines.push(`   👤 ${item.user?.name || ''}  🔗 ${item.link}`);
+    }
+    lines.push('');
+  }
+  lines.push(`💡 Usa la URL con la herramienta download_music para descargar.`);
+  return { content: [{ type: 'text', text: lines.join('\n') }] };
+}
+
+// ─── Deezer: download_music via @karlincoder/deemix ──────────────────────────
+let deemixLib = null;
+function getDeemix() {
+  if (deemixLib) return deemixLib;
+  if (!process.env.DEEZER_ARL) throw new Error('DEEZER_ARL no configurado. Ejecuta: fly secrets set DEEZER_ARL=<tu_arl>');
+  try {
+    deemixLib = require('@karlincoder/deemix');
+  } catch (e) {
+    throw new Error('Librería @karlincoder/deemix no disponible: ' + e.message);
+  }
+  return deemixLib;
+}
+
+async function callDownloadMusic(args) {
+  const { url, quality = 'mp3_320' } = args;
+  if (!process.env.DEEZER_ARL) {
+    throw new Error(
+      'DEEZER_ARL no configurado.\n' +
+      'Para habilitarlo ejecuta en tu terminal:\n' +
+      '  fly secrets set DEEZER_ARL=<tu_arl>\n\n' +
+      'Cómo obtener tu ARL:\n' +
+      '  1. Abre deezer.com en Chrome (cuenta Free o Premium)\n' +
+      '  2. DevTools → Application → Cookies → deezer.com\n' +
+      '  3. Copia el valor de la cookie "arl"'
+    );
+  }
+
+  // Map quality string to Deezer bitrate constant
+  const QUALITY_MAP = {
+    'flac':    9,   // FLAC lossless (requiere Premium)
+    'mp3_320': 3,   // MP3 320kbps  (requiere Premium)
+    'mp3_128': 1,   // MP3 128kbps  (cuenta Free)
+  };
+  const bitrateId = QUALITY_MAP[quality] || 3;
+  const outDir    = os.tmpdir();
+
+  const deemix = getDeemix();
+
+  let result;
+  try {
+    result = await deemix.download({
+      url,
+      arl:      process.env.DEEZER_ARL,
+      bitrate:  bitrateId,
+      outputDir: outDir,
+    });
+  } catch (e) {
+    throw new Error(`Error al descargar desde Deezer: ${e.message}`);
+  }
+
+  // @karlincoder/deemix devuelve array de archivos descargados
+  const files = Array.isArray(result) ? result : [result];
+  if (!files || files.length === 0) throw new Error('No se descargó ningún archivo.');
+
+  const lines = [`✅ Descarga desde Deezer completada (${files.length} archivo${files.length > 1 ? 's' : ''})`, ''];
+
+  for (const file of files) {
+    const filePath = file.path || file;
+    if (!fs.existsSync(filePath)) continue;
+    const fileName = path.basename(filePath);
+    const sizeMB   = (fs.statSync(filePath).size / 1024 / 1024).toFixed(2);
+    const token    = registerTemp(filePath, fileName);
+    lines.push(`🎵 ${fileName}`);
+    lines.push(`   💾 ${sizeMB} MB`);
+    lines.push(`   🔗 https://devtools-mcp-kus.fly.dev/download/${token}`);
+    if (file.title)  lines.push(`   📌 ${file.title}`);
+    if (file.artist) lines.push(`   👤 ${file.artist}`);
+    if (file.album)  lines.push(`   💿 ${file.album}`);
+    lines.push('');
+  }
+
+  lines.push(`⚠️  Los enlaces expiran en 10 minutos.`);
+  return { content: [{ type: 'text', text: lines.join('\n') }] };
+}
+
+// ─── Iniciar bridges ──────────────────────────────────────────────────────────
 const bridges = {};
 for (const def of MCP_DEFS) {
   if (def.enabled()) {
@@ -308,10 +449,10 @@ for (const def of MCP_DEFS) {
 
 // Cache de tools (se refresca cada 60s)
 let toolsCache = null;
-let toolsMap   = {};  // tool.name -> bridge name
+let toolsMap   = {};
 async function getTools() {
   if (toolsCache) return toolsCache;
-  const all = [...FETCH_TOOLS, ...DOWNLOAD_TOOLS];
+  const all = [...FETCH_TOOLS, ...DOWNLOAD_TOOLS, ...DEEZER_TOOLS];
   for (const [, b] of Object.entries(bridges)) {
     if (!b.ready) continue;
     try { all.push(...(await b.listTools())); } catch (_) {}
@@ -327,14 +468,18 @@ async function callAnyTool(name, args) {
   const bridge = toolsMap[name];
   if (bridge === 'fetch')    return callFetch(args);
   if (bridge === 'download') return callDownloadAudio(args);
-  if (bridges[bridge])       return bridges[bridge].callTool(name, args);
+  if (bridge === 'deezer') {
+    if (name === 'search_deezer')  return callSearchDeezer(args);
+    if (name === 'download_music') return callDownloadMusic(args);
+  }
+  if (bridges[bridge]) return bridges[bridge].callTool(name, args);
   for (const [, b] of Object.entries(bridges)) {
     try { return await b.callTool(name, args); } catch (_) {}
   }
   throw new Error(`Tool not found: ${name}`);
 }
 
-// ─── Express ─────────────────────────────────────────────────────────────────
+// ─── Express ──────────────────────────────────────────────────────────────────
 const app = express();
 app.use(express.json());
 
@@ -348,14 +493,14 @@ function auth(req, res, next) {
   res.status(401).json({ error: 'Unauthorized' });
 }
 
-// ─── Ruta de descarga temporal (sin auth, el token ya es el secreto) ─────────
+// ─── Ruta de descarga temporal ────────────────────────────────────────────────
 app.get('/download/:token', (req, res) => {
   const entry = tempFiles.get(req.params.token);
   if (!entry) return res.status(404).send('Archivo no encontrado o enlace expirado.');
   if (Date.now() > entry.expires) {
     try { fs.unlinkSync(entry.filePath); } catch (_) {}
     tempFiles.delete(req.params.token);
-    return res.status(410).send('Enlace expirado. Vuelve a ejecutar download_audio.');
+    return res.status(410).send('Enlace expirado. Vuelve a ejecutar la herramienta de descarga.');
   }
   res.download(entry.filePath, entry.fileName, err => {
     if (!err) {
@@ -365,7 +510,7 @@ app.get('/download/:token', (req, res) => {
   });
 });
 
-// ─── SSE UNICO ───────────────────────────────────────────────────────────────
+// ─── SSE UNICO ────────────────────────────────────────────────────────────────
 const sessions = new Map();
 
 app.get('/sse', auth, (req, res) => {
@@ -375,20 +520,17 @@ app.get('/sse', auth, (req, res) => {
   res.setHeader('Connection', 'keep-alive');
   res.setHeader('X-Accel-Buffering', 'no');
   res.flushHeaders();
-
   sessions.set(sid, res);
   res.write(`event: endpoint\ndata: /message?sessionId=${sid}\n\n`);
-
   const ping = setInterval(() => res.write(': ping\n\n'), 15000);
   req.on('close', () => { clearInterval(ping); sessions.delete(sid); });
 });
 
-// ─── MESSAGE UNICO ───────────────────────────────────────────────────────────
+// ─── MESSAGE UNICO ────────────────────────────────────────────────────────────
 app.post('/message', auth, async (req, res) => {
   const { sessionId } = req.query;
   const msg = req.body;
   const session = sessions.get(sessionId);
-
   const emit = (result) => {
     const payload = JSON.stringify({ jsonrpc: '2.0', id: msg.id, result });
     if (session) session.write(`event: message\ndata: ${payload}\n\n`);
@@ -399,12 +541,11 @@ app.post('/message', auth, async (req, res) => {
     if (session) session.write(`event: message\ndata: ${payload}\n\n`);
     res.json({ ok: true });
   };
-
   try {
     if (msg.method === 'initialize') {
       return emit({
         protocolVersion: '2024-11-05',
-        serverInfo: { name: 'kus-devtools', version: '2.2.0' },
+        serverInfo: { name: 'kus-devtools', version: '2.3.0' },
         capabilities: { tools: {} },
       });
     }
@@ -424,16 +565,16 @@ app.post('/message', auth, async (req, res) => {
   }
 });
 
-// ─── Rutas individuales (compatibilidad hacia atras) ──────────────────────────
+// ─── Rutas individuales (compatibilidad) ──────────────────────────────────────
 app.get('/:tool/sse', auth, (req, res) => {
   res.redirect(`/sse?token=${getToken(req)}`);
 });
 
 // ─── Info y health ────────────────────────────────────────────────────────────
 app.get('/', (_req, res) => {
-  const active = ['fetch', 'download_audio', ...Object.keys(bridges)];
+  const active = ['fetch', 'download_audio', 'download_music', 'search_deezer', ...Object.keys(bridges)];
   res.type('text').send(
-    'KUS DevTools MCP Gateway v2.2.0 — Endpoint Unico\n' +
+    'KUS DevTools MCP Gateway v2.3.0 — Endpoint Unico\n' +
     '=================================================\n\n' +
     'UN SOLO LINK para todas las herramientas:\n' +
     '  SSE:  /sse?token=TOKEN\n' +
@@ -446,12 +587,14 @@ app.get('/health', async (_req, res) => {
   const tools = {};
   for (const [k, b] of Object.entries(bridges))
     tools[k] = b.ready ? 'ready' : 'starting';
-  tools['fetch']         = 'ready';
+  tools['fetch']          = 'ready';
   tools['download_audio'] = 'ready';
+  tools['download_music'] = process.env.DEEZER_ARL ? 'ready' : 'needs DEEZER_ARL secret';
+  tools['search_deezer']  = 'ready';
   res.json({ status: 'ok', tools });
 });
 
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`KUS MCP Gateway v2.2.0 (endpoint unico) en puerto ${PORT}`);
-  console.log('Tools:', ['fetch', 'download_audio', ...Object.keys(bridges)].join(', '));
+  console.log(`KUS MCP Gateway v2.3.0 (endpoint unico) en puerto ${PORT}`);
+  console.log('Tools:', ['fetch', 'download_audio', 'download_music', 'search_deezer', ...Object.keys(bridges)].join(', '));
 });

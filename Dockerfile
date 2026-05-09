@@ -1,11 +1,12 @@
 FROM node:20-slim
 
-# Dependencias del sistema: ffmpeg para audio, git para clonar repos, python3/wget para yt-dlp
+# Dependencias del sistema
 RUN apt-get update && apt-get install -y \
     chromium \
     ffmpeg \
     git \
     python3 \
+    python3-pip \
     wget \
     ca-certificates \
     --no-install-recommends \
@@ -20,13 +21,13 @@ WORKDIR /app
 COPY package.json .
 RUN npm install --omit=dev
 
-# Clonar y compilar mcp-claude-spotify (no esta en npm)
+# Clonar y compilar mcp-claude-spotify
 RUN git clone --depth=1 https://github.com/imprvhub/mcp-claude-spotify.git /app/spotify-mcp \
   && cd /app/spotify-mcp \
   && npm install \
   && npm run build
 
-# Forzar descarga del binario yt-dlp al momento del build
+# Prebuild binario yt-dlp
 RUN node -e "require('yt-dlp-exec')"
 
 COPY . .
