@@ -18,6 +18,11 @@ primary_region = 'dfw'
     path = '/health'
     timeout = '5s'
 
+# Volumen persistente para tokens de Spotify OAuth
+[[mounts]]
+  source = 'spotify_tokens'
+  destination = '/data/spotify'
+
 [[vm]]
   memory = '2gb'
   cpu_kind = 'shared'
