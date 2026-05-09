@@ -5,6 +5,10 @@
  */
 const express = require('express');
 const { spawn } = require('child_process');
+const path    = require('path');
+const os      = require('os');
+const fs      = require('fs');
+const ytdlp   = require('yt-dlp-exec');
 
 const PORT      = parseInt(process.env.PORT || '8080');
 const API_TOKEN = process.env.MCP_AUTH_TOKEN || '';
@@ -170,6 +174,129 @@ async function callFetch(args) {
   return { content: [{ type: 'text', text: `HTTP ${res.status}\n\n${text.slice(0, 50000)}` }] };
 }
 
+// ─── Download Audio Tool (yt-dlp) ─────────────────────────────────────────────
+// Soporta: YouTube, SoundCloud, Bandcamp, Vimeo, Twitter/X, TikTok y +1000 sitios
+// Salida: URL temporal de descarga (archivo guardado en /tmp del contenedor)
+const DOWNLOAD_TOOLS = [{
+  name: 'download_audio',
+  _bridge: 'download',
+  description:
+    'Descarga el audio de una URL de video/música (YouTube, SoundCloud, TikTok, Vimeo, Twitter/X, Bandcamp, y más de 1000 sitios). ' +
+    'Devuelve metadata del track y una URL temporal para descargar el archivo MP3 desde este servidor. ' +
+    'La URL temporal expira en 10 minutos.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      url: {
+        type: 'string',
+        description: 'URL del video o canción a descargar (YouTube, SoundCloud, TikTok, etc.)',
+      },
+      format: {
+        type: 'string',
+        enum: ['mp3', 'opus', 'm4a', 'flac', 'wav'],
+        default: 'mp3',
+        description: 'Formato de audio de salida (default: mp3)',
+      },
+      quality: {
+        type: 'string',
+        enum: ['0', '2', '5', '9'],
+        default: '2',
+        description: 'Calidad de audio VBR: 0=máxima, 2=alta (default), 5=media, 9=mínima',
+      },
+    },
+    required: ['url'],
+  },
+}];
+
+// Mapa temporal: token → { filePath, expires }
+const tempFiles = new Map();
+
+// Limpieza automática de archivos expirados cada 5 minutos
+setInterval(() => {
+  const now = Date.now();
+  for (const [token, entry] of tempFiles.entries()) {
+    if (now > entry.expires) {
+      try { fs.unlinkSync(entry.filePath); } catch (_) {}
+      tempFiles.delete(token);
+    }
+  }
+}, 5 * 60 * 1000);
+
+async function callDownloadAudio(args) {
+  const { url, format = 'mp3', quality = '2' } = args;
+
+  // Primero obtener metadata sin descargar
+  let meta;
+  try {
+    meta = await ytdlp(url, {
+      dumpSingleJson: true,
+      noWarnings: true,
+      noCheckCertificate: true,
+      preferFreeFormats: true,
+      skipDownload: true,
+    });
+  } catch (e) {
+    throw new Error(`No se pudo obtener metadata de la URL: ${e.message}`);
+  }
+
+  const title    = meta.title    || 'audio';
+  const artist   = meta.uploader || meta.channel || meta.artist || 'Desconocido';
+  const duration = meta.duration ? `${Math.floor(meta.duration / 60)}:${String(meta.duration % 60).padStart(2, '0')}` : 'N/A';
+  const thumb    = meta.thumbnail || '';
+  const site     = meta.extractor_key || 'Desconocido';
+
+  // Nombre de archivo seguro
+  const safeName = title.replace(/[^a-zA-Z0-9\-_\s]/g, '').trim().replace(/\s+/g, '_').slice(0, 80);
+  const outFile  = path.join(os.tmpdir(), `kus_audio_${Date.now()}_${safeName}.${format}`);
+
+  // Descargar y convertir
+  try {
+    await ytdlp(url, {
+      extractAudio: true,
+      audioFormat: format,
+      audioQuality: quality,
+      output: outFile,
+      noWarnings: true,
+      noCheckCertificate: true,
+      preferFreeFormats: true,
+    });
+  } catch (e) {
+    throw new Error(`Error al descargar audio: ${e.message}`);
+  }
+
+  if (!fs.existsSync(outFile)) {
+    throw new Error('El archivo de audio no fue generado. Verifica que ffmpeg esté instalado.');
+  }
+
+  const stat    = fs.statSync(outFile);
+  const sizeMB  = (stat.size / 1024 / 1024).toFixed(2);
+
+  // Generar token temporal (10 minutos)
+  const token   = `dl_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  const expires = Date.now() + 10 * 60 * 1000;
+  tempFiles.set(token, { filePath: outFile, fileName: `${safeName}.${format}`, expires });
+
+  const downloadUrl = `/download/${token}`;
+
+  const summary = [
+    `✅ Audio listo para descargar`,
+    ``,
+    `🎵 Título:    ${title}`,
+    `👤 Artista:   ${artist}`,
+    `⏱  Duración:  ${duration}`,
+    `🌐 Fuente:    ${site}`,
+    `📁 Formato:   ${format.toUpperCase()} (calidad ${quality})`,
+    `💾 Tamaño:    ${sizeMB} MB`,
+    ``,
+    `🔗 URL de descarga (válida 10 min):`,
+    `   https://devtools-mcp-kus.fly.dev${downloadUrl}`,
+    ``,
+    thumb ? `🖼  Thumbnail: ${thumb}` : '',
+  ].filter(l => l !== undefined).join('\n');
+
+  return { content: [{ type: 'text', text: summary }] };
+}
+
 // ─── Iniciar bridges ─────────────────────────────────────────────────────────
 const bridges = {};
 for (const def of MCP_DEFS) {
@@ -184,7 +311,7 @@ let toolsCache = null;
 let toolsMap   = {};  // tool.name -> bridge name
 async function getTools() {
   if (toolsCache) return toolsCache;
-  const all = [...FETCH_TOOLS];
+  const all = [...FETCH_TOOLS, ...DOWNLOAD_TOOLS];
   for (const [, b] of Object.entries(bridges)) {
     if (!b.ready) continue;
     try { all.push(...(await b.listTools())); } catch (_) {}
@@ -198,8 +325,9 @@ async function getTools() {
 
 async function callAnyTool(name, args) {
   const bridge = toolsMap[name];
-  if (bridge === 'fetch') return callFetch(args);
-  if (bridges[bridge])   return bridges[bridge].callTool(name, args);
+  if (bridge === 'fetch')    return callFetch(args);
+  if (bridge === 'download') return callDownloadAudio(args);
+  if (bridges[bridge])       return bridges[bridge].callTool(name, args);
   for (const [, b] of Object.entries(bridges)) {
     try { return await b.callTool(name, args); } catch (_) {}
   }
@@ -219,6 +347,23 @@ function auth(req, res, next) {
   if (getToken(req) === API_TOKEN) return next();
   res.status(401).json({ error: 'Unauthorized' });
 }
+
+// ─── Ruta de descarga temporal (sin auth, el token ya es el secreto) ─────────
+app.get('/download/:token', (req, res) => {
+  const entry = tempFiles.get(req.params.token);
+  if (!entry) return res.status(404).send('Archivo no encontrado o enlace expirado.');
+  if (Date.now() > entry.expires) {
+    try { fs.unlinkSync(entry.filePath); } catch (_) {}
+    tempFiles.delete(req.params.token);
+    return res.status(410).send('Enlace expirado. Vuelve a ejecutar download_audio.');
+  }
+  res.download(entry.filePath, entry.fileName, err => {
+    if (!err) {
+      try { fs.unlinkSync(entry.filePath); } catch (_) {}
+      tempFiles.delete(req.params.token);
+    }
+  });
+});
 
 // ─── SSE UNICO ───────────────────────────────────────────────────────────────
 const sessions = new Map();
@@ -259,7 +404,7 @@ app.post('/message', auth, async (req, res) => {
     if (msg.method === 'initialize') {
       return emit({
         protocolVersion: '2024-11-05',
-        serverInfo: { name: 'kus-devtools', version: '2.1.0' },
+        serverInfo: { name: 'kus-devtools', version: '2.2.0' },
         capabilities: { tools: {} },
       });
     }
@@ -286,9 +431,9 @@ app.get('/:tool/sse', auth, (req, res) => {
 
 // ─── Info y health ────────────────────────────────────────────────────────────
 app.get('/', (_req, res) => {
-  const active = ['fetch', ...Object.keys(bridges)];
+  const active = ['fetch', 'download_audio', ...Object.keys(bridges)];
   res.type('text').send(
-    'KUS DevTools MCP Gateway v2.1.0 — Endpoint Unico\n' +
+    'KUS DevTools MCP Gateway v2.2.0 — Endpoint Unico\n' +
     '=================================================\n\n' +
     'UN SOLO LINK para todas las herramientas:\n' +
     '  SSE:  /sse?token=TOKEN\n' +
@@ -301,11 +446,12 @@ app.get('/health', async (_req, res) => {
   const tools = {};
   for (const [k, b] of Object.entries(bridges))
     tools[k] = b.ready ? 'ready' : 'starting';
-  tools['fetch'] = 'ready';
+  tools['fetch']         = 'ready';
+  tools['download_audio'] = 'ready';
   res.json({ status: 'ok', tools });
 });
 
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`KUS MCP Gateway v2.1.0 (endpoint unico) en puerto ${PORT}`);
-  console.log('Tools:', ['fetch', ...Object.keys(bridges)].join(', '));
+  console.log(`KUS MCP Gateway v2.2.0 (endpoint unico) en puerto ${PORT}`);
+  console.log('Tools:', ['fetch', 'download_audio', ...Object.keys(bridges)].join(', '));
 });
