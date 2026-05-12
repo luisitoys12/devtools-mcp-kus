@@ -24,6 +24,10 @@
     "kus-npmdocs": {
       "url": "https://devtools-mcp-kus.fly.dev/npmdocs/sse?token=TU_TOKEN",
       "transport": "sse"
+    },
+    "kus-oci": {
+      "url": "https://devtools-mcp-kus.fly.dev/oci/sse?token=TU_TOKEN",
+      "transport": "sse"
     }
   }
 }
