@@ -1,6 +1,6 @@
 {
   "name": "kus-mcp-gateway",
-  "version": "2.3.0",
+  "version": "2.4.0",
   "description": "KUS DevTools MCP Gateway — 250+ herramientas para devs web, juegos, 3D, AI y más",
   "main": "server.js",
   "dependencies": {
@@ -21,6 +21,7 @@
     "mcp-obsidian": "latest",
     "mcp-server-axios": "latest",
     "yt-dlp-exec": "latest",
-    "@karlincoder/deemix": "latest"
+    "@karlincoder/deemix": "latest",
+    "oci-sdk": "latest"
   }
 }
