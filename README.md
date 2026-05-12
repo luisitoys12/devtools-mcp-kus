@@ -82,5 +82,100 @@ Express Gateway (:8080)
     |-- /oci/*        --> @oracle/mcp (OCI)  (:8937)
 ```
 
+
+---
+
+## 🔐 Configurar Oracle OCI — Paso a paso
+
+### 1. Crear el API Key en la Consola OCI
+
+1. Entra a [cloud.oracle.com](https://cloud.oracle.com) con tu cuenta
+2. Clic en el ícono de **Profile** (arriba derecha) → **User settings**
+3. En el menú lateral → **API Keys** → **Add API Key**
+4. Deja marcado **"Generate API key pair"**
+5. Haz clic en **Download private key** → guarda el archivo `.pem` en un lugar seguro
+6. Clic en **Add** — Oracle muestra el **Configuration File Preview**
+
+### 2. Copiar tus credenciales del Configuration File Preview
+
+Oracle te muestra algo así:
+
+```ini
+[DEFAULT]
+user=ocid1.user.oc1..aaaaaXXXXX
+fingerprint=aa:bb:cc:dd:ee:ff:11:22:33:44:55:66:77:88:99:00
+tenancy=ocid1.tenancy.oc1..aaaaaXXXXX
+region=mx-monterrey-1
+key_file=~/.oci/oci_api_key.pem
+```
+
+Guarda todos esos valores — los necesitas en el paso siguiente.
+
+### 3. Registrar los secrets en Fly.io
+
+```bash
+fly secrets set OCI_TENANCY_OCID="ocid1.tenancy.oc1..xxx" --app devtools-mcp-kus
+fly secrets set OCI_USER_OCID="ocid1.user.oc1..xxx"       --app devtools-mcp-kus
+fly secrets set OCI_FINGERPRINT="aa:bb:cc:dd:ee:ff:..."  --app devtools-mcp-kus
+fly secrets set OCI_REGION="mx-monterrey-1"               --app devtools-mcp-kus
+
+# La llave privada (contenido completo del .pem):
+cat ~/Downloads/oci_api_key.pem | fly secrets set OCI_PRIVATE_KEY=- --app devtools-mcp-kus
+```
+
+### 4. Verificar que los secrets están activos
+
+```bash
+fly secrets list --app devtools-mcp-kus
+# Deben aparecer: OCI_TENANCY_OCID, OCI_USER_OCID, OCI_FINGERPRINT, OCI_REGION, OCI_PRIVATE_KEY
+```
+
+### 5. Redeploy para que tome los nuevos secrets
+
+```bash
+fly deploy --app devtools-mcp-kus
+```
+
+Una vez desplegado, el endpoint OCI estará disponible en:
+```
+https://devtools-mcp-kus.fly.dev/oci/sse
+```
+
+> ⚠️ **Importante:** No subas el archivo `.pem` a GitHub. Solo va a Fly.io como secret.
+
+---
+
+## 📻 MCPs Ideales para Radio Online (Runaradio / Estacionkusmedios)
+
+Estos MCP Servers se integran perfectamente con un proyecto de radio online:
+
+| MCP Server | Caso de uso en radio | Endpoint sugerido |
+|---|---|---|
+| **AzuraCast REST API** | Control total: playlist, now-playing, requests, arrancar/parar estaciones | `/azuracast/*` → `:8938` |
+| **ElevenLabs** | Generación de voz para jingles, locución IA, IDs de estación | ya disponible en Composio |
+| **Firecrawl** | Scraping de noticias locales Irapuato para leer al aire | `/firecrawl/*` → `:8935` |
+| **YouTube MCP** | Publicar grabaciones de programas, clips de entrevistas | ya disponible en Composio |
+| **Google Calendar** | Programación de shows, recordatorios de transmisión en vivo | ya disponible en Composio |
+| **Notion** | Guiones de programas, bitácora de emisión, directorio de locutores | ya disponible en Composio |
+| **n8n / Zapier webhook** | Automatización: cuando termina un bloque → postear en Instagram | custom route |
+
+### AzuraCast MCP — El más valioso para radio
+
+AzuraCast expone una **REST API completa** que puedes proxear como MCP server:
+
+```bash
+# Datos en tiempo real de la estación:
+GET https://tu-azuracast.com/api/nowplaying/runaradio
+
+# Controlar playlist desde IA:
+POST https://tu-azuracast.com/api/station/runaradio/playlist/{id}/toggle
+
+# Historial de canciones:
+GET https://tu-azuracast.com/api/station/runaradio/history
+```
+
+Se puede envolver en un MCP server ligero con `@modelcontextprotocol/sdk` y agregarlo
+al gateway de `devtools-mcp-kus` en el puerto `:8938`.
+
 ---
 Hecho con ❤️ por **Cush Media** — Irapuato, Guanajuato 🇲🇽
