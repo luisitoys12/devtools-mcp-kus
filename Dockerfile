@@ -1,6 +1,6 @@
 FROM node:20-slim
 
-# Dependencias del sistema
+# Dependencias del sistema para Playwright/Puppeteer + herramientas
 RUN apt-get update && apt-get install -y \
     chromium \
     ffmpeg \
@@ -30,9 +30,13 @@ RUN apt-get update && apt-get install -y \
 
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
     PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium \
-    PLAYWRIGHT_BROWSERS_PATH=/usr/bin \
-    PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium \
-    PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
+    PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
+    PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
+
+# Crear el directorio que Playwright busca y symlink del browser
+RUN mkdir -p /ms-playwright/chromium-1169/chrome-linux \
+  && ln -sf /usr/bin/chromium /ms-playwright/chromium-1169/chrome-linux/chrome
 
 # Instalar spotdl en venv aislado para evitar conflictos con pip del sistema
 RUN python3 -m venv /opt/spotdl-env \
@@ -49,14 +53,17 @@ WORKDIR /app
 COPY package.json .
 RUN npm install --omit=dev
 
+# Prebuild binario yt-dlp
+RUN node -e "require('yt-dlp-exec')"
+
+# Verificar que @playwright/mcp CLI existe
+RUN ls ./node_modules/@playwright/mcp/cli.js && echo "playwright/mcp CLI OK"
+
 # Clonar y compilar mcp-claude-spotify
 RUN git clone --depth=1 https://github.com/imprvhub/mcp-claude-spotify.git /app/spotify-mcp \
   && cd /app/spotify-mcp \
   && npm install \
   && npm run build
-
-# Prebuild binario yt-dlp
-RUN node -e "require('yt-dlp-exec')"
 
 COPY . .
 

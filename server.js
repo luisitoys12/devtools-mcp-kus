@@ -1,5 +1,5 @@
 /**
- * KUS DevTools MCP Gateway — Endpoint UNICO v2.4.0
+ * KUS DevTools MCP Gateway — Endpoint UNICO v2.4.2
  * UN solo SSE con TODAS las herramientas combinadas
  * URL: https://devtools-mcp-kus.fly.dev/sse?token=TOKEN
  */
@@ -17,9 +17,22 @@ if (!API_TOKEN) { console.error('MCP_AUTH_TOKEN requerido'); process.exit(1); }
 
 // ─── MCPs stdio ────────────────────────────────────────────────────────────────
 const MCP_DEFS = [
-  { name: 'playwright', cmd: 'node', args: ['./node_modules/@playwright/mcp/cli.js', '--headless'], env: {}, enabled: () => true },
-  { name: 'memory',     cmd: 'node', args: ['./node_modules/@modelcontextprotocol/server-memory/dist/index.js'], env: {}, enabled: () => true },
-  { name: 'context7',   cmd: 'node', args: ['./node_modules/@upstash/context7-mcp/dist/index.js'], env: {}, enabled: () => true },
+  {
+    name: 'playwright',
+    cmd: 'node',
+    args: [
+      './node_modules/@playwright/mcp/cli.js',
+      '--headless',
+      '--executable-path', '/usr/bin/chromium',
+    ],
+    env: {
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1',
+      PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH: '/usr/bin/chromium',
+    },
+    enabled: () => true,
+  },
+  { name: 'memory',   cmd: 'node', args: ['./node_modules/@modelcontextprotocol/server-memory/dist/index.js'], env: {}, enabled: () => true },
+  { name: 'context7', cmd: 'node', args: ['./node_modules/@upstash/context7-mcp/dist/index.js'], env: {}, enabled: () => true },
   {
     name: 'firecrawl',
     cmd: 'node',
@@ -193,34 +206,32 @@ async function callDownloadMusic(args) {
 }
 
 // ─── Tool: search_spotify + download_spotify (spotdl) ───────────────────────────
-// spotdl usa la API oficial de Spotify para metadata y YouTube para el audio.
-// Requiere: SPOTIFY_CLIENT_ID y SPOTIFY_CLIENT_SECRET (ya configurados en Fly).
 const SPOTIFY_DL_TOOLS = [
   {
     name:'download_spotify', _bridge:'spotdl',
     description:
       'Descarga música desde Spotify (canciones, álbumes, playlists) usando spotdl. ' +
-      'Obtiene metadata oficial de Spotify (portada, letra, artista, álbum) y descarga el audio desde YouTube en MP3 320kbps. ' +
-      'Requiere SPOTIFY_CLIENT_ID y SPOTIFY_CLIENT_SECRET configurados (ya activos). ' +
-      'Ejemplos de URL: https://open.spotify.com/track/..., https://open.spotify.com/album/..., https://open.spotify.com/playlist/...',
+      'Obtiene metadata oficial de Spotify y descarga el audio desde YouTube en MP3 320kbps. ' +
+      'Requiere SPOTIFY_CLIENT_ID y SPOTIFY_CLIENT_SECRET configurados. ' +
+      'Ejemplos: https://open.spotify.com/track/..., https://open.spotify.com/album/...',
     inputSchema:{
       type:'object',
       properties:{
         url:{ type:'string', description:'URL de Spotify: track, album o playlist' },
-        format:{ type:'string', enum:['mp3','opus','flac','ogg','m4a'], default:'mp3', description:'Formato de audio (default: mp3)' },
-        bitrate:{ type:'string', enum:['128k','192k','320k','auto'], default:'320k', description:'Bitrate de salida (default: 320k)' },
+        format:{ type:'string', enum:['mp3','opus','flac','ogg','m4a'], default:'mp3' },
+        bitrate:{ type:'string', enum:['128k','192k','320k','auto'], default:'320k' },
       },
       required:['url'],
     },
   },
   {
     name:'search_spotify_track', _bridge:'spotdl',
-    description:'Busca canciones en Spotify usando la API oficial y devuelve URLs directas para usar con download_spotify.',
+    description:'Busca canciones en Spotify y devuelve URLs para usar con download_spotify.',
     inputSchema:{
       type:'object',
       properties:{
-        query:{ type:'string', description:'Texto de búsqueda (ej: "Bad Bunny Tití me preguntó", "Taylor Swift Shake It Off")' },
-        limit:{ type:'number', default:10, description:'Cantidad de resultados (1-20)' },
+        query:{ type:'string' },
+        limit:{ type:'number', default:10 },
       },
       required:['query'],
     },
@@ -241,8 +252,6 @@ async function callSearchSpotifyTrack(args) {
   const clientId     = process.env.SPOTIFY_CLIENT_ID;
   const clientSecret = process.env.SPOTIFY_CLIENT_SECRET;
   if (!clientId||!clientSecret) throw new Error('SPOTIFY_CLIENT_ID y SPOTIFY_CLIENT_SECRET no configurados.');
-
-  // Obtener token de la API pública de Spotify
   const tokenRes = await fetch('https://accounts.spotify.com/api/token', {
     method:'POST',
     headers:{ 'Content-Type':'application/x-www-form-urlencoded', 'Authorization':'Basic '+Buffer.from(`${clientId}:${clientSecret}`).toString('base64') },
@@ -250,25 +259,17 @@ async function callSearchSpotifyTrack(args) {
   });
   const tokenData = await tokenRes.json();
   if (!tokenData.access_token) throw new Error('No se pudo obtener token de Spotify: '+JSON.stringify(tokenData));
-
   const searchRes = await fetch(`https://api.spotify.com/v1/search?q=${encodeURIComponent(query)}&type=track&limit=${Math.min(20,limit)}`, {
     headers:{ 'Authorization':'Bearer '+tokenData.access_token },
   });
   const searchData = await searchRes.json();
   const items = searchData?.tracks?.items||[];
   if (!items.length) return {content:[{type:'text',text:`No se encontraron resultados para "${query}" en Spotify.`}]};
-
   const lines=[`🔍 Resultados en Spotify para "${query}":`,``];
   for (const track of items) {
     const dur = track.duration_ms ? `${Math.floor(track.duration_ms/60000)}:${String(Math.floor((track.duration_ms%60000)/1000)).padStart(2,'0')}` : '';
     const artists = track.artists.map(a=>a.name).join(', ');
-    lines.push(
-      `🎵 ${track.name}`,
-      `   👤 ${artists} — 💿 ${track.album?.name||''}`,
-      `   ⏱ ${dur}  📅 ${track.album?.release_date||''}`,
-      `   🔗 ${track.external_urls?.spotify||''}`,
-      ``,
-    );
+    lines.push(`🎵 ${track.name}`,`   👤 ${artists} — 💿 ${track.album?.name||''}`,`   ⏱ ${dur}  📅 ${track.album?.release_date||''}`,`   🔗 ${track.external_urls?.spotify||''}`,``);
   }
   lines.push(`💡 Usa la URL con download_spotify para descargar.`);
   return {content:[{type:'text',text:lines.join('\n')}]};
@@ -279,10 +280,8 @@ async function callDownloadSpotify(args) {
   const clientId     = process.env.SPOTIFY_CLIENT_ID;
   const clientSecret = process.env.SPOTIFY_CLIENT_SECRET;
   if (!clientId||!clientSecret) throw new Error('SPOTIFY_CLIENT_ID y SPOTIFY_CLIENT_SECRET no configurados en Fly.io.');
-
   const outDir = path.join(os.tmpdir(), `spotdl_${Date.now()}`);
   fs.mkdirSync(outDir, {recursive:true});
-
   const spotdlArgs = [
     'download', url,
     '--output', path.join(outDir, '{artist} - {title}.{output-ext}'),
@@ -293,37 +292,29 @@ async function callDownloadSpotify(args) {
     '--no-cache',
     '--print-errors',
   ];
-
   let stdout;
   try {
     const result = await runSpotdl(spotdlArgs, { timeout: 5*60*1000, cwd: outDir,
       env: { ...process.env, SPOTIPY_CLIENT_ID: clientId, SPOTIPY_CLIENT_SECRET: clientSecret } });
     stdout = result.stdout;
   } catch(e) {
-    // Limpiar dir temp en error
     try { fs.rmSync(outDir, {recursive:true,force:true}); } catch(_) {}
     throw new Error(`Error spotdl: ${e.message}`);
   }
-
-  // Recopilar archivos descargados
   let files = [];
   try {
     files = fs.readdirSync(outDir)
       .filter(f => ['.mp3','.opus','.flac','.ogg','.m4a'].includes(path.extname(f).toLowerCase()))
       .map(f => path.join(outDir, f));
   } catch(_) {}
-
   if (!files.length) {
     try { fs.rmSync(outDir, {recursive:true,force:true}); } catch(_) {}
     throw new Error(`spotdl no descargó archivos. Salida:\n${stdout.slice(0,2000)}`);
   }
-
   const lines=[`✅ Spotify: ${files.length} archivo(s) listos`,``];
   for (const fp of files) {
-    const fn     = path.basename(fp);
-    const sizeMB = (fs.statSync(fp).size/1024/1024).toFixed(2);
-    const tok    = registerTemp(fp, fn);
-    lines.push(`🎵 ${fn}`, `   💾 ${sizeMB} MB`, `   🔗 ${makeDownloadUrl(tok)}`, ``);
+    const fn=path.basename(fp), sizeMB=(fs.statSync(fp).size/1024/1024).toFixed(2), tok=registerTemp(fp,fn);
+    lines.push(`🎵 ${fn}`,`   💾 ${sizeMB} MB`,`   🔗 ${makeDownloadUrl(tok)}`,``);
   }
   lines.push(`⚠️  Los enlaces expiran en 10 minutos.`);
   return {content:[{type:'text',text:lines.join('\n')}]};
@@ -369,7 +360,7 @@ app.use(express.json());
 function getToken(req){const b=(req.headers['authorization']||'').replace(/^Bearer\s+/i,'').trim();if(b)return b;try{return new URL(req.url,'http://x').searchParams.get('token')||'';}catch{return '';}}
 function auth(req,res,next){if(getToken(req)===API_TOKEN)return next();res.status(401).json({error:'Unauthorized'});}
 
-// Ruta de descarga temporal (sin auth, el token es el secreto)
+// Ruta de descarga temporal
 app.get('/download/:token',(req,res)=>{
   const entry=tempFiles.get(req.params.token);
   if(!entry) return res.status(404).send('Archivo no encontrado o enlace expirado.');
@@ -393,7 +384,7 @@ app.post('/message',auth,async(req,res)=>{
   const emit=r=>{const p=JSON.stringify({jsonrpc:'2.0',id:msg.id,result:r});if(session)session.write(`event: message\ndata: ${p}\n\n`);res.json({ok:true});};
   const emitErr=(c,m)=>{const p=JSON.stringify({jsonrpc:'2.0',id:msg.id,error:{code:c,message:m}});if(session)session.write(`event: message\ndata: ${p}\n\n`);res.json({ok:true});};
   try{
-    if(msg.method==='initialize') return emit({protocolVersion:'2024-11-05',serverInfo:{name:'kus-devtools',version:'2.4.0'},capabilities:{tools:{}}});
+    if(msg.method==='initialize') return emit({protocolVersion:'2024-11-05',serverInfo:{name:'kus-devtools',version:'2.4.2'},capabilities:{tools:{}}});
     if(msg.method==='notifications/initialized') return res.json({ok:true});
     if(msg.method==='tools/list'){const tools=await getTools();return emit({tools});}
     if(msg.method==='tools/call'){const result=await callAnyTool(msg.params.name,msg.params.arguments||{});return emit(result);}
@@ -407,7 +398,7 @@ app.get('/:tool/sse',auth,(req,res)=>res.redirect(`/sse?token=${getToken(req)}`)
 // Info y health
 app.get('/',(_req,res)=>{
   const active=['fetch','download_audio','download_music','search_deezer','download_spotify','search_spotify_track',...Object.keys(bridges)];
-  res.type('text').send(`KUS DevTools MCP Gateway v2.4.0\n${'='.repeat(50)}\n\nSSE:  /sse?token=TOKEN\nPOST: /message?sessionId=ID\n\nHerramientas: ${active.join(', ')}\n`);
+  res.type('text').send(`KUS DevTools MCP Gateway v2.4.2\n${'='.repeat(50)}\n\nSSE:  /sse?token=TOKEN\nPOST: /message?sessionId=ID\n\nHerramientas: ${active.join(', ')}\n`);
 });
 app.get('/health',async(_req,res)=>{
   const tools={};
@@ -418,10 +409,10 @@ app.get('/health',async(_req,res)=>{
   tools['download_spotify']=(process.env.SPOTIFY_CLIENT_ID&&process.env.SPOTIFY_CLIENT_SECRET)?'ready':'needs SPOTIFY secrets';
   tools['search_spotify_track']='ready';
   tools['search_deezer']='ready';
-  res.json({status:'ok',tools});
+  res.json({status:'ok',version:'2.4.2',tools});
 });
 
 app.listen(PORT,'0.0.0.0',()=>{
-  console.log(`KUS MCP Gateway v2.4.0 en puerto ${PORT}`);
+  console.log(`KUS MCP Gateway v2.4.2 en puerto ${PORT}`);
   console.log('Tools:',['fetch','download_audio','download_music','search_deezer','download_spotify','search_spotify_track',...Object.keys(bridges)].join(', '));
 });
