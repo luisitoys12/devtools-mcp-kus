@@ -1,6 +1,6 @@
 {
   "name": "kus-mcp-gateway",
-  "version": "2.4.2",
+  "version": "2.4.3",
   "description": "KUS DevTools MCP Gateway — 250+ herramientas para devs web, juegos, 3D, AI y más",
   "main": "server.js",
   "dependencies": {
@@ -10,8 +10,6 @@
     "@modelcontextprotocol/sdk": "latest",
     "@modelcontextprotocol/server-memory": "latest",
     "@modelcontextprotocol/server-filesystem": "latest",
-    "@modelcontextprotocol/server-github": "latest",
-    "@modelcontextprotocol/server-postgres": "latest",
     "@upstash/context7-mcp": "latest",
     "firecrawl-mcp": "latest",
     "yt-dlp-exec": "latest"
