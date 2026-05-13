@@ -1,10 +1,11 @@
 {
   "name": "kus-mcp-gateway",
-  "version": "2.4.0",
+  "version": "2.4.1",
   "description": "KUS DevTools MCP Gateway — 250+ herramientas para devs web, juegos, 3D, AI y más",
   "main": "server.js",
   "dependencies": {
     "express": "^4.19.2",
+    "axios": "^1.7.0",
     "@playwright/mcp": "latest",
     "@modelcontextprotocol/sdk": "latest",
     "@modelcontextprotocol/server-memory": "latest",
@@ -16,7 +17,6 @@
     "firecrawl-mcp": "latest",
     "mcp-server-chart": "latest",
     "@notionhq/notion-mcp-server": "latest",
-    "mcp-server-axios": "latest",
     "yt-dlp-exec": "latest"
   }
 }
